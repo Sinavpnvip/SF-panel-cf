@@ -2,11 +2,24 @@ import { handleApi } from "./routes/api.js";
 import { handleUpdate } from "./telegram/bot.js";
 import { json } from "./utils/helpers.js";
 import { securityHeaders, rateLimit } from "./middleware/security.js";
+import { isProxyPath, handleVlessWebSocket } from "./proxy/vless.js";
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     let path = url.pathname;
+
+    // ---- VLESS WebSocket proxy (BPB-style) ----
+    if (isProxyPath(path, env)) {
+      if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+        return handleVlessWebSocket(request, env);
+      }
+      // health for path
+      return new Response("sf-proxy-ok", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    }
 
     if (request.method === "OPTIONS") {
       return json({ ok: true });
@@ -47,7 +60,8 @@ export default {
       return json({
         ok: true,
         app: "sf-panel-cf",
-        version: env.APP_VERSION || "2.0.0",
+        version: env.APP_VERSION || "2.1.0",
+        proxy_path: env.PROXY_PATH || "/sf-vpn",
       });
     }
 
@@ -60,6 +74,6 @@ export default {
       return securityHeaders(res);
     }
 
-    return new Response("SF-Panel CF v2", { status: 200 });
+    return new Response("SF-Panel CF v2.1 + VLESS proxy", { status: 200 });
   },
 };
