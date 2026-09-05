@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070b14">
+  <title>SF-Panel CF</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- AUTH -->
+  <div id="auth" class="wrap">
+    <div class="auth-card">
+      <div class="brand-mark">SF</div>
+      <h1>SF-Panel <small>CF v2</small></h1>
+      <p id="authHint" class="muted">در حال بررسی وضعیت…</p>
+
+      <div id="loginBox" class="hidden">
+        <label>نام کاربری</label>
+        <input id="user" autocomplete="username">
+        <label>رمز عبور</label>
+        <input id="pass" type="password" autocomplete="current-password">
+        <button class="btn block" id="btnLogin">ورود</button>
+        <p id="loginErr" class="err"></p>
+      </div>
+
+      <div id="setupBox" class="hidden">
+        <p class="muted">نصب اولیه — رمز حداقل ۸ کاراکتر</p>
+        <label>نام کاربری ادمین</label>
+        <input id="suser" value="admin" autocomplete="username">
+        <label>رمز عبور</label>
+        <input id="spass" type="password" autocomplete="new-password">
+        <label>تکرار رمز</label>
+        <input id="spass2" type="password" autocomplete="new-password">
+        <button class="btn block" id="btnSetup">نصب و ورود</button>
+        <p id="setupErr" class="err"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="app" class="hidden">
+    <aside class="side">
+      <div class="logo">SF-Panel CF</div>
+      <button class="nav on" data-v="dash">📊 داشبورد</button>
+      <button class="nav" data-v="nodes">🖥 نودها / SNI</button>
+      <button class="nav" data-v="plans">📦 پلن‌ها</button>
+      <button class="nav" data-v="users">👥 کاربران</button>
+      <button class="nav" data-v="receipts">🧾 رسیدها</button>
+      <button class="nav" data-v="coupons">🎟 کد تخفیف</button>
+      <button class="nav" data-v="accounts">🔗 اکانت‌ها</button>
+      <button class="nav" data-v="settings">⚙️ تنظیمات</button>
+      <div class="foot">
+        <button class="btn ghost block" id="btnOut">خروج</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="v-dash" class="view">
+        <h2>داشبورد</h2>
+        <div class="grid4" id="stats"></div>
+        <h3>رویدادهای اخیر</h3>
+        <ul class="list" id="events"></ul>
+      </section>
+
+      <section id="v-nodes" class="view hidden">
+        <h2>نودهای VPN + پروکسی / SNI</h2>
+        <p class="muted">ترافیک روی سرور خارجی است. اینجا host، path، SNI و تنظیمات لینک را مشخص می‌کنید.</p>
+        <div class="card">
+          <div class="field-grid">
+            <div><label>نام نود</label><input id="nName" placeholder="EU-1"></div>
+            <div><label>Public Host *</label><input id="nHost" placeholder="vpn.example.com" class="ltr" dir="ltr"></div>
+            <div><label>پورت</label><input id="nPort" type="number" value="443"></div>
+            <div><label>Transport</label>
+              <select id="nTransport"><option value="ws">ws</option><option value="httpupgrade">httpupgrade</option></select>
+            </div>
+            <div><label>Path</label><input id="nPath" value="/sf-vpn" dir="ltr"></div>
+            <div><label>SNI</label><input id="nSni" placeholder="همان host یا دامنه دیگر" dir="ltr"></div>
+            <div><label>Host Header</label><input id="nHH" placeholder="Host هدر WS" dir="ltr"></div>
+            <div><label>Security</label>
+              <select id="nSec"><option value="tls">tls</option><option value="none">none</option></select>
+            </div>
+            <div><label>Fingerprint</label>
+              <select id="nFp"><option>chrome</option><option>firefox</option><option>safari</option><option>ios</option><option>android</option><option>edge</option><option>random</option></select>
+            </div>
+            <div><label>ALPN</label><input id="nAlpn" value="http/1.1" dir="ltr"></div>
+            <div class="full"><label>API URL (اختیاری — ساخت اکانت روی پنل اصلی)</label><input id="nApi" dir="ltr" placeholder="https://panel.example.com"></div>
+            <div class="full"><label>API Token</label><input id="nTok" type="password" dir="ltr"></div>
+          </div>
+          <button class="btn" id="btnAddNode" style="margin-top:12px">افزودن نود</button>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>نام</th><th>Host</th><th>Path</th><th>SNI</th><th>Sec</th><th></th></tr></thead>
+          <tbody id="nodesTb"></tbody>
+        </table>
+      </section>
+
+      <section id="v-plans" class="view hidden">
+        <h2>پلن‌ها</h2>
+        <div class="row">
+          <input id="pTitle" placeholder="عنوان">
+          <input id="pDays" type="number" value="30" placeholder="روز">
+          <input id="pGb" type="number" value="50" placeholder="گیگ">
+          <input id="pPrice" type="number" placeholder="قیمت تومان">
+          <button class="btn" id="btnAddPlan">افزودن</button>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>عنوان</th><th>روز</th><th>گیگ</th><th>قیمت</th><th></th></tr></thead>
+          <tbody id="plansTb"></tbody>
+        </table>
+      </section>
+
+      <section id="v-users" class="view hidden">
+        <h2>کاربران ربات</h2>
+        <table>
+          <thead><tr><th>TG ID</th><th>یوزرنیم</th><th>موجودی</th><th>خرید</th><th>وضعیت</th><th></th></tr></thead>
+          <tbody id="usersTb"></tbody>
+        </table>
+      </section>
+
+      <section id="v-receipts" class="view hidden">
+        <h2>رسیدها</h2>
+        <table>
+          <thead><tr><th>#</th><th>کاربر</th><th>مبلغ</th><th>وضعیت</th><th></th></tr></thead>
+          <tbody id="rcpsTb"></tbody>
+        </table>
+      </section>
+
+      <section id="v-coupons" class="view hidden">
+        <h2>کد تخفیف</h2>
+        <div class="row">
+          <input id="cCode" placeholder="CODE">
+          <input id="cPct" type="number" placeholder="درصد">
+          <input id="cMax" type="number" value="0" placeholder="حداکثر استفاده">
+          <button class="btn" id="btnAddCoupon">افزودن</button>
+        </div>
+        <table>
+          <thead><tr><th>کد</th><th>٪</th><th>استفاده</th></tr></thead>
+          <tbody id="couponsTb"></tbody>
+        </table>
+      </section>
+
+      <section id="v-accounts" class="view hidden">
+        <h2>اکانت‌ها</h2>
+        <table>
+          <thead><tr><th>#</th><th>کاربر</th><th>ایمیل</th><th>sub</th><th>انقضا</th></tr></thead>
+          <tbody id="accTb"></tbody>
+        </table>
+      </section>
+
+      <section id="v-settings" class="view hidden">
+        <h2>تنظیمات</h2>
+        <div class="card">
+          <label>Public Domain (بدون https)</label>
+          <input id="setDomain" dir="ltr" placeholder="panel.example.com">
+          <button class="btn" id="btnSaveSet" style="margin-top:12px">ذخیره</button>
+          <p id="setMsg" class="muted"></p>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
