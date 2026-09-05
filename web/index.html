@@ -151,9 +151,19 @@
       <section id="v-settings" class="view hidden">
         <h2>تنظیمات</h2>
         <div class="card">
+          <h3 style="margin-top:0">عمومی</h3>
           <label>Public Domain (بدون https)</label>
           <input id="setDomain" dir="ltr" placeholder="panel.example.com">
-          <button class="btn" id="btnSaveSet" style="margin-top:12px">ذخیره</button>
+          <h3>پرداخت کارت‌به‌کارت</h3>
+          <label>شماره کارت</label>
+          <input id="setCard" dir="ltr" placeholder="6037-...." inputmode="numeric">
+          <label>به نام</label>
+          <input id="setCardName" placeholder="نام صاحب کارت">
+          <label>حداقل واریز (تومان)</label>
+          <input id="setMinDep" type="number" value="10000">
+          <label>متن پشتیبانی</label>
+          <input id="setSupport" placeholder="آیدی پشتیبانی یا توضیح">
+          <button class="btn" id="btnSaveSet" style="margin-top:12px">ذخیره تنظیمات</button>
           <p id="setMsg" class="muted"></p>
         </div>
       </section>

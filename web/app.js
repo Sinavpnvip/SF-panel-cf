@@ -307,13 +307,23 @@ async function loadAccounts() {
 async function loadSettings() {
   const s = await api("/api/settings");
   $("setDomain").value = s.public_domain || "";
+  $("setCard").value = s.card_number || "";
+  $("setCardName").value = s.card_name || "";
+  $("setMinDep").value = s.min_deposit || "10000";
+  $("setSupport").value = s.support_text || "";
 }
 $("btnSaveSet").onclick = async () => {
   await api("/api/settings", {
     method: "POST",
-    body: JSON.stringify({ public_domain: $("setDomain").value.trim() }),
+    body: JSON.stringify({
+      public_domain: $("setDomain").value.trim(),
+      card_number: $("setCard").value.trim(),
+      card_name: $("setCardName").value.trim(),
+      min_deposit: $("setMinDep").value,
+      support_text: $("setSupport").value.trim(),
+    }),
   });
-  $("setMsg").textContent = "ذخیره شد (برای PUBLIC_DOMAIN در Worker هم vars را ست کنید)";
+  $("setMsg").textContent = "✅ ذخیره شد — در ربات کارت به خریدار نشان داده می‌شود";
 };
 
 boot();
