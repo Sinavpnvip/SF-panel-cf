@@ -20,8 +20,9 @@ id = "acff03347952410b96447e8c9bc11677"
 
 [vars]
 APP_NAME = "SF-Panel"
-APP_VERSION = "2.0.0"
-PUBLIC_DOMAIN = ""
+APP_VERSION = "2.1.0"
+PUBLIC_DOMAIN = "sf-panel-cf.26z8lnecu1js.workers.dev"
+PROXY_PATH = "/sf-vpn"
 SUB_TITLE = "SF VPN"
 REF_PERCENT = "20"
 TRIAL_GB = "1"
