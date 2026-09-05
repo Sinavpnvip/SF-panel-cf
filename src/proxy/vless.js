@@ -1,101 +1,133 @@
 /**
- * VLESS + WS on Cloudflare Worker — hardened for common clients
+ * Production VLESS over WebSocket for Cloudflare Workers
+ * Pattern aligned with BPB/Zeus-style CF proxies.
  */
 import { connect } from "cloudflare:sockets";
 
-function uuidFromBytes(arr, offset) {
-  const h = [];
-  for (let i = 0; i < 16; i++) {
-    h.push(arr[offset + i].toString(16).padStart(2, "0"));
-  }
-  return (
-    h.slice(0, 8).join("") +
-    "-" +
-    h.slice(8, 10).join("") +
-    "-" +
-    h.slice(10, 12).join("") +
-    "-" +
-    h.slice(12, 14).join("") +
-    "-" +
-    h.slice(14, 16).join("")
-  ).toLowerCase();
-}
-
-function b64ToBuf(s) {
-  if (!s) return null;
+function base64ToUint8Array(b64) {
+  if (!b64) return null;
   try {
-    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    const s = b64.replace(/-/g, "+").replace(/_/g, "/");
     const pad = "=".repeat((4 - (s.length % 4)) % 4);
-    const bin = atob(s + pad);
-    const u = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
-    return u;
+    const binary = atob(s + pad);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
   } catch {
     return null;
   }
 }
 
-function parseHeader(u8) {
-  if (!u8 || u8.length < 24) return null;
-  const version = u8[0];
-  const uuid = uuidFromBytes(u8, 1);
-  const optLen = u8[17];
-  let p = 18 + optLen;
-  if (u8.length < p + 3) return null;
-  const cmd = u8[p++];
-  const port = (u8[p] << 8) | u8[p + 1];
-  p += 2;
-  const atyp = u8[p++];
-  let host = "";
-  if (atyp === 1) {
-    if (u8.length < p + 4) return null;
-    host = `${u8[p++]}.${u8[p++]}.${u8[p++]}.${u8[p++]}`;
-  } else if (atyp === 2) {
-    const l = u8[p++];
-    if (u8.length < p + l) return null;
-    host = new TextDecoder().decode(u8.subarray(p, p + l));
-    p += l;
-  } else if (atyp === 3) {
-    if (u8.length < p + 16) return null;
-    const parts = [];
-    for (let i = 0; i < 8; i++) {
-      parts.push(((u8[p] << 8) | u8[p + 1]).toString(16));
-      p += 2;
-    }
-    host = parts.join(":");
-  } else return null;
-  return { version, uuid, cmd, port, host, headerLen: p };
+function uuidBytesToString(bytes, offset = 0) {
+  const hex = [];
+  for (let i = 0; i < 16; i++) {
+    hex.push(bytes[offset + i].toString(16).padStart(2, "0"));
+  }
+  return (
+    hex.slice(0, 8).join("") +
+    "-" +
+    hex.slice(8, 10).join("") +
+    "-" +
+    hex.slice(10, 12).join("") +
+    "-" +
+    hex.slice(12, 14).join("") +
+    "-" +
+    hex.slice(14, 16).join("")
+  ).toLowerCase();
 }
 
-async function allowUuid(env, uuid) {
+/**
+ * Parse VLESS header from buffer.
+ * Returns { uuid, address, port, payload: Uint8Array } or null
+ */
+function parseVlessHeader(buffer) {
+  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (u8.byteLength < 24) return null;
+
+  let offset = 0;
+  const version = u8[offset++]; // 1 byte (usually 0)
+  const uuid = uuidBytesToString(u8, offset);
+  offset += 16;
+
+  const addonLen = u8[offset++];
+  offset += addonLen; // skip addon
+  if (offset + 3 > u8.byteLength) return null;
+
+  const cmd = u8[offset++]; // 1 = TCP, 2 = UDP
+  const port = (u8[offset] << 8) | u8[offset + 1];
+  offset += 2;
+
+  const atyp = u8[offset++];
+  let address = "";
+
+  if (atyp === 1) {
+    // IPv4
+    if (offset + 4 > u8.byteLength) return null;
+    address = `${u8[offset]}.${u8[offset + 1]}.${u8[offset + 2]}.${u8[offset + 3]}`;
+    offset += 4;
+  } else if (atyp === 2) {
+    // Domain
+    const len = u8[offset++];
+    if (offset + len > u8.byteLength) return null;
+    address = new TextDecoder().decode(u8.subarray(offset, offset + len));
+    offset += len;
+  } else if (atyp === 3) {
+    // IPv6
+    if (offset + 16 > u8.byteLength) return null;
+    const parts = [];
+    for (let i = 0; i < 8; i++) {
+      parts.push(((u8[offset] << 8) | u8[offset + 1]).toString(16));
+      offset += 2;
+    }
+    address = parts.join(":");
+  } else {
+    return null;
+  }
+
+  if (!address || !port) return null;
+
+  return {
+    version,
+    uuid,
+    cmd,
+    address,
+    port,
+    payload: u8.subarray(offset),
+  };
+}
+
+async function isUuidAllowed(env, uuid) {
   if (String(env.PROXY_OPEN || "") === "1") return true;
   const id = String(uuid || "").toLowerCase();
-  if (String(env.PROXY_MASTER_UUID || "").toLowerCase() === id) return true;
-  if (!env.DB) return String(env.PROXY_OPEN || "") === "1";
+  const master = String(env.PROXY_MASTER_UUID || "").toLowerCase();
+  if (master && master === id) return true;
+  if (!env.DB) return false;
   try {
-    const r = await env.DB.prepare(
+    const row = await env.DB.prepare(
       "SELECT enable, expiry FROM accounts WHERE uuid = ? LIMIT 1"
     )
       .bind(id)
       .first();
-    if (!r) {
-      // try any case via scan small table
-      const all = await env.DB.prepare(
-        "SELECT uuid, enable, expiry FROM accounts WHERE enable = 1 LIMIT 500"
-      ).all();
-      const hit = (all.results || []).find(
-        (x) => String(x.uuid).toLowerCase() === id
-      );
-      if (!hit) return false;
-      if (hit.expiry && Number(hit.expiry) < Date.now()) return false;
+    if (row) {
+      if (!row.enable) return false;
+      if (row.expiry && Number(row.expiry) > 0 && Number(row.expiry) < Date.now()) {
+        return false;
+      }
       return true;
     }
-    if (!r.enable) return false;
-    if (r.expiry && Number(r.expiry) > 0 && Number(r.expiry) < Date.now())
+    const all = await env.DB.prepare(
+      "SELECT uuid, enable, expiry FROM accounts WHERE enable = 1 LIMIT 500"
+    ).all();
+    const hit = (all.results || []).find(
+      (r) => String(r.uuid || "").toLowerCase() === id
+    );
+    if (!hit) return false;
+    if (hit.expiry && Number(hit.expiry) > 0 && Number(hit.expiry) < Date.now()) {
       return false;
+    }
     return true;
   } catch {
-    return String(env.PROXY_OPEN || "") === "1";
+    return false;
   }
 }
 
@@ -107,121 +139,214 @@ export function isProxyPath(pathname, env) {
   return path === p || path.startsWith(p + "/");
 }
 
+/**
+ * Main entry — WebSocket upgrade request on proxy path
+ */
 export async function handleVlessWebSocket(request, env) {
   const upgrade = (request.headers.get("Upgrade") || "").toLowerCase();
   if (upgrade !== "websocket") {
-    return new Response("sf-proxy-ws", { status: 200 });
+    return new Response("sf-proxy-ok", { status: 200 });
   }
 
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair);
   server.accept();
 
-  const proto = request.headers.get("sec-websocket-protocol") || "";
-  const early = b64ToBuf(proto.split(",")[0].trim());
+  // Early data (first VLESS chunk) from sec-websocket-protocol
+  const protoHeader = request.headers.get("sec-websocket-protocol") || "";
+  const earlyToken = protoHeader.split(",")[0].trim();
+  const earlyData = base64ToUint8Array(earlyToken);
 
-  pipe(server, env, early).catch(() => {
+  // Run session without blocking the 101 response
+  handleSession(server, env, earlyData).catch(() => {
     try {
-      server.close();
+      server.close(1011, "error");
     } catch {}
   });
 
   const headers = new Headers();
-  if (proto) headers.set("Sec-WebSocket-Protocol", proto.split(",")[0].trim());
+  if (earlyToken) {
+    headers.set("Sec-WebSocket-Protocol", earlyToken);
+  }
 
-  return new Response(null, { status: 101, webSocket: client, headers });
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+    headers,
+  });
 }
 
-async function pipe(ws, env, early) {
-  let remoteWriter = null;
-  let remote = null;
-  let inited = false;
+// Alias expected by some index imports
+export const handleVless = handleVlessWebSocket;
+
+async function handleSession(ws, env, earlyData) {
+  /** @type {import("cloudflare:sockets").Socket | null} */
+  let remoteSocket = null;
+  let headerDone = false;
   let closed = false;
 
-  const shutdown = () => {
+  const closeAll = () => {
     if (closed) return;
     closed = true;
     try {
-      remoteWriter?.releaseLock();
-    } catch {}
-    try {
-      remote?.close();
-    } catch {}
-    try {
       ws.close();
+    } catch {}
+    try {
+      remoteSocket?.close();
     } catch {}
   };
 
-  const onChunk = async (buf) => {
-    if (closed || !buf || !buf.byteLength) return;
-    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  /**
+   * Process the first buffer containing VLESS header (+ optional payload)
+   */
+  const processFirstChunk = async (chunk) => {
+    if (headerDone || closed) return;
+    const parsed = parseVlessHeader(chunk);
+    if (!parsed) {
+      closeAll();
+      return;
+    }
 
-    if (!inited) {
-      const h = parseHeader(u8);
-      if (!h || h.cmd !== 1) {
-        shutdown();
-        return;
-      }
-      if (!(await allowUuid(env, h.uuid))) {
-        shutdown();
-        return;
-      }
-      inited = true;
-      try {
-        remote = connect({ hostname: h.host, port: h.port });
-        remoteWriter = remote.writable.getWriter();
-      } catch {
-        shutdown();
-        return;
-      }
-      // VLESS response
-      try {
-        ws.send(new Uint8Array([h.version, 0x00]));
-      } catch {
-        shutdown();
-        return;
-      }
-      const rest = u8.subarray(h.headerLen);
-      if (rest.length) {
-        try {
-          await remoteWriter.write(rest);
-        } catch {
-          shutdown();
-          return;
-        }
-      }
-      // remote -> ws
-      (async () => {
-        try {
-          const reader = remote.readable.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value && ws.readyState === 1) ws.send(value);
-          }
-        } catch {
-        } finally {
-          shutdown();
-        }
-      })();
+    // Still parse UUID even when PROXY_OPEN=1 (required to advance buffer)
+    const allowed = await isUuidAllowed(env, parsed.uuid);
+    if (!allowed) {
+      closeAll();
+      return;
+    }
+
+    // Only TCP for stable browsing/ping
+    if (parsed.cmd !== 1) {
+      closeAll();
       return;
     }
 
     try {
-      await remoteWriter.write(u8);
+      remoteSocket = connect({
+        hostname: parsed.address,
+        port: Number(parsed.port),
+      });
     } catch {
-      shutdown();
+      closeAll();
+      return;
+    }
+
+    headerDone = true;
+
+    // Immediate VLESS response BEFORE any piping (version 0, addon 0)
+    try {
+      ws.send(new Uint8Array([0, 0]));
+    } catch {
+      closeAll();
+      return;
+    }
+
+    // If header chunk had leftover payload, write it first
+    const writer = remoteSocket.writable.getWriter();
+    try {
+      if (parsed.payload && parsed.payload.byteLength > 0) {
+        await writer.write(parsed.payload);
+      }
+    } catch {
+      try {
+        writer.releaseLock();
+      } catch {}
+      closeAll();
+      return;
+    }
+    try {
+      writer.releaseLock();
+    } catch {}
+
+    // Safe bidirectional piping
+    await pipeBoth(ws, remoteSocket, closeAll);
+  };
+
+  // Queue for messages arriving before/during init
+  const pending = [];
+  let processing = false;
+
+  const pumpQueue = async () => {
+    if (processing) return;
+    processing = true;
+    try {
+      while (pending.length && !closed) {
+        const buf = pending.shift();
+        if (!headerDone) {
+          await processFirstChunk(buf);
+        } else if (remoteSocket) {
+          try {
+            const w = remoteSocket.writable.getWriter();
+            await w.write(buf instanceof Uint8Array ? buf : new Uint8Array(buf));
+            w.releaseLock();
+          } catch {
+            closeAll();
+          }
+        }
+      }
+    } finally {
+      processing = false;
     }
   };
 
-  ws.addEventListener("message", (ev) => {
-    const data = ev.data;
-    if (data instanceof ArrayBuffer) onChunk(data);
-    else if (data && data.arrayBuffer)
-      data.arrayBuffer().then(onChunk).catch(shutdown);
-  });
-  ws.addEventListener("close", shutdown);
-  ws.addEventListener("error", shutdown);
+  ws.addEventListener("message", (event) => {
+    if (closed) return;
+    const data = event.data;
+    const toBuf =
+      data instanceof ArrayBuffer
+        ? Promise.resolve(new Uint8Array(data))
+        : data?.arrayBuffer
+          ? data.arrayBuffer().then((b) => new Uint8Array(b))
+          : Promise.resolve(null);
 
-  if (early && early.length) await onChunk(early);
+    toBuf
+      .then((u8) => {
+        if (!u8 || closed) return;
+        pending.push(u8);
+        return pumpQueue();
+      })
+      .catch(() => closeAll());
+  });
+
+  ws.addEventListener("close", closeAll);
+  ws.addEventListener("error", closeAll);
+
+  // Process early data FIRST if present (do not wait for message event)
+  if (earlyData && earlyData.byteLength > 0) {
+    pending.push(earlyData);
+    await pumpQueue();
+  }
+}
+
+/**
+ * Bidirectional pipe with try/catch to avoid silent worker crashes
+ */
+async function pipeBoth(ws, remoteSocket, closeAll) {
+  // ws (client) is already reading via message events for client→remote
+  // Here we only need remote → client, plus ensure remote writable stays open
+  // Actually client→remote is handled in message handler after headerDone.
+  // remote → ws:
+  try {
+    await remoteSocket.readable.pipeTo(
+      new WritableStream({
+        write(chunk) {
+          try {
+            if (ws.readyState === 1) {
+              ws.send(chunk);
+            }
+          } catch {
+            throw new Error("ws send failed");
+          }
+        },
+        close() {
+          closeAll();
+        },
+        abort() {
+          closeAll();
+        },
+      }),
+      { preventClose: false }
+    );
+  } catch {
+    closeAll();
+  }
 }
