@@ -51,6 +51,42 @@ export async function sendMessage(token, chatId, text, reply_markup) {
   return tgApi(token, "sendMessage", body);
 }
 
+export async function sendPhoto(token, chatId, fileId, caption, reply_markup) {
+  const body = {
+    chat_id: chatId,
+    photo: fileId,
+    caption: trimTg(caption || "", 1000),
+    parse_mode: "HTML",
+  };
+  if (reply_markup) body.reply_markup = reply_markup;
+  return tgApi(token, "sendPhoto", body);
+}
+
+export async function sendDocument(token, chatId, fileId, caption, reply_markup) {
+  const body = {
+    chat_id: chatId,
+    document: fileId,
+    caption: trimTg(caption || "", 1000),
+    parse_mode: "HTML",
+  };
+  if (reply_markup) body.reply_markup = reply_markup;
+  return tgApi(token, "sendDocument", body);
+}
+
+async function getPaySettings(db, env) {
+  const card =
+    (await q(db, "SELECT v FROM settings WHERE k='card_number'", [], true))?.v ||
+    "";
+  const name =
+    (await q(db, "SELECT v FROM settings WHERE k='card_name'", [], true))?.v ||
+    "";
+  const minD =
+    (await q(db, "SELECT v FROM settings WHERE k='min_deposit'", [], true))?.v ||
+    env.MIN_DEPOSIT ||
+    "10000";
+  return { card, name, minD: safeInt(minD, 10000) };
+}
+
 function mainKb() {
   return {
     inline_keyboard: [
@@ -239,13 +275,16 @@ async function handleCb(env, db, token, cbq) {
     return;
   }
   if (data === "wallet") {
+    const pay = await getPaySettings(db, env);
     await setState(env, tg, { step: "deposit_amount", data: {} });
     await sendMessage(
       token,
       chat,
-      `💳 مبلغ شارژ را به تومان بفرستید\nحداقل: ${toman(
-        env.MIN_DEPOSIT || 10000
-      )}\n/cancel انصراف`
+      `💳 <b>افزایش موجودی</b>\n\nموجودی فعلی: <b>${toman(
+        u.balance
+      )}</b>\nحداقل واریز: <b>${toman(
+        pay.minD
+      )}</b>\n\nمبلغ را به تومان بفرستید.\n/cancel انصراف`
     );
     return;
   }
@@ -390,7 +429,8 @@ async function handleState(env, db, token, chat, text, st) {
   }
   if (st.step === "deposit_amount") {
     const amount = safeInt(text);
-    const min = safeInt(env.MIN_DEPOSIT, 10000);
+    const pay = await getPaySettings(db, env);
+    const min = pay.minD;
     if (!amount || amount < min) {
       await sendMessage(token, chat, "مبلغ نامعتبر. حداقل " + toman(min));
       return;
@@ -400,10 +440,19 @@ async function handleState(env, db, token, chat, text, st) {
       return;
     }
     await setState(env, tg, { step: "deposit_receipt", data: { amount } });
+    const cardLine = pay.card
+      ? `💳 شماره کارت:\n<code>${esc(pay.card)}</code>\n`
+      : "⚠️ کارت هنوز توسط ادمین تنظیم نشده.\n";
+    const nameLine = pay.name
+      ? `👤 به نام: <b>${esc(pay.name)}</b>\n`
+      : "";
     await sendMessage(
       token,
       chat,
-      `مبلغ: <b>${toman(amount)}</b>\nحالا عکس یا فایل رسید را بفرستید.`
+      `✅ مبلغ: <b>${toman(amount)}</b>\n\n` +
+        cardLine +
+        nameLine +
+        `\nپس از واریز، <b>عکس یا فایل رسید</b> را همین‌جا بفرست.\n/cancel انصراف`
     );
     return;
   }
@@ -487,30 +536,59 @@ async function handleMedia(env, db, token, msg, chat) {
   }
   const amount = st.data.amount;
   let fileId = "";
-  if (msg.photo?.length) fileId = msg.photo[msg.photo.length - 1].file_id;
-  else if (msg.document) fileId = msg.document.file_id;
+  let isPhoto = false;
+  if (msg.photo?.length) {
+    fileId = msg.photo[msg.photo.length - 1].file_id;
+    isPhoto = true;
+  } else if (msg.document) {
+    fileId = msg.document.file_id;
+  }
+  if (!fileId) {
+    await sendMessage(token, chat, "فایل معتبر نبود. دوباره عکس رسید را بفرست.");
+    return;
+  }
   await ex(
     db,
     "INSERT INTO receipts(user_id,amount,file_id,status,ts) VALUES(?,?,?,?,?)",
     [tg, amount, fileId, "pending", nowMs()]
   );
+  const row = await q(
+    db,
+    "SELECT id FROM receipts WHERE user_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+    [tg],
+    true
+  );
+  const rid = row?.id || 0;
   await clearState(env, tg);
   await sendMessage(
     token,
     chat,
-    "✅ رسید ثبت شد. پس از تایید ادمین موجودی اضافه می‌شود.",
+    "✅ رسید شما ثبت شد و برای ادمین ارسال شد.\nپس از تایید، موجودی اضافه می‌شود.",
     mainKb()
   );
+  const uname = (msg.from && msg.from.username) || "—";
+  const caption =
+    `🧾 <b>رسید #${rid}</b>\n\n` +
+    `👤 کاربر: <code>${tg}</code> @${esc(uname)}\n` +
+    `💰 مبلغ: <b>${toman(amount)}</b>\n` +
+    `⏰ ${new Date().toLocaleString("fa-IR")}`;
+  const kb = {
+    inline_keyboard: [
+      [
+        { text: "✅ تایید", callback_data: "adm:rok:" + rid },
+        { text: "❌ رد", callback_data: "adm:rno:" + rid },
+      ],
+    ],
+  };
   for (const aid of adminIds(env)) {
     try {
-      await sendMessage(
-        token,
-        aid,
-        `🧾 رسید جدید\nکاربر: <code>${tg}</code>\nمبلغ: ${toman(
-          amount
-        )}\nاز /panel تایید کنید`
-      );
-    } catch {}
+      if (isPhoto) await sendPhoto(token, aid, fileId, caption, kb);
+      else await sendDocument(token, aid, fileId, caption, kb);
+    } catch (e) {
+      try {
+        await sendMessage(token, aid, caption + "\n(فایل ارسال نشد)", kb);
+      } catch {}
+    }
   }
 }
 
