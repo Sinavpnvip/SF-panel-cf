@@ -1,0 +1,22 @@
+{
+  "name": "sf-panel-cf",
+  "version": "2.0.0",
+  "private": true,
+  "description": "SF-Panel control plane for Cloudflare Workers — full shop, admin, Telegram bot, secure API",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create sf-panel-db",
+    "db:migrate": "wrangler d1 migrations apply sf-panel-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply sf-panel-db --local",
+    "tail": "wrangler tail",
+    "secret:list": "wrangler secret list"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
