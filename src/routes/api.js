@@ -67,10 +67,18 @@ export async function handleApi(req, env, path) {
     const node = acc.node_id
       ? await q(db, "SELECT * FROM nodes WHERE id=?", [acc.node_id], true)
       : null;
+    const host = (env.PUBLIC_DOMAIN || node?.public_host || "example.com")
+      .replace(/^https?:\/\//, "")
+      .split("/")[0];
     const link = buildVlessLink(
       node || {
-        public_host: env.PUBLIC_DOMAIN || "example.com",
-        path_prefix: "/sf-vpn",
+        public_host: host,
+        path_prefix: env.PROXY_PATH || "/sf-vpn",
+        sni: host,
+        host_header: host,
+        security: "tls",
+        port: 443,
+        transport: "ws",
       },
       acc.uuid,
       acc.email
@@ -370,12 +378,24 @@ export async function handleApi(req, env, path) {
         env.PUBLIC_DOMAIN || (await getSetting(db, "public_domain")),
       app_name: env.APP_NAME,
       version: env.APP_VERSION,
+      card_number: await getSetting(db, "card_number"),
+      card_name: await getSetting(db, "card_name"),
+      min_deposit: await getSetting(db, "min_deposit", env.MIN_DEPOSIT || "10000"),
+      support_text: await getSetting(db, "support_text"),
     });
   }
   if (path === "/api/settings" && method === "POST") {
     const b = await req.json();
     if (b.public_domain != null)
-      await setSetting(db, "public_domain", b.public_domain);
+      await setSetting(db, "public_domain", String(b.public_domain).slice(0, 120));
+    if (b.card_number != null)
+      await setSetting(db, "card_number", String(b.card_number).slice(0, 32));
+    if (b.card_name != null)
+      await setSetting(db, "card_name", String(b.card_name).slice(0, 64));
+    if (b.min_deposit != null)
+      await setSetting(db, "min_deposit", String(safeInt(b.min_deposit, 10000)));
+    if (b.support_text != null)
+      await setSetting(db, "support_text", String(b.support_text).slice(0, 500));
     return json({ ok: true });
   }
 
