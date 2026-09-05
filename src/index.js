@@ -2,23 +2,34 @@ import { handleApi } from "./routes/api.js";
 import { handleUpdate } from "./telegram/bot.js";
 import { json } from "./utils/helpers.js";
 import { securityHeaders, rateLimit } from "./middleware/security.js";
-import { isProxyPath, handleVlessWebSocket } from "./proxy/vless.js";
+import {
+  isProxyPath,
+  handleVlessWebSocket,
+} from "./proxy/vless.js";
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    let path = url.pathname;
+    const path = url.pathname;
 
-    // ---- VLESS WebSocket proxy (BPB-style) ----
+    // ---- VLESS WebSocket proxy ----
+    const proxyPath = (env.PROXY_PATH || "/sf-vpn").replace(/\/$/, "") || "/sf-vpn";
+    const pathNorm = path.replace(/\/$/, "") || "/";
+    if (pathNorm === proxyPath || pathNorm.startsWith(proxyPath + "/")) {
+      const isWs =
+        (request.headers.get("Upgrade") || "").toLowerCase() === "websocket";
+      if (isWs) {
+        return handleVlessWebSocket(request, env);
+      }
+      return new Response("sf-proxy-ok", { status: 200 });
+    }
+
+    // Also support isProxyPath helper
     if (isProxyPath(path, env)) {
       if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
         return handleVlessWebSocket(request, env);
       }
-      // health for path
-      return new Response("sf-proxy-ok", {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      });
+      return new Response("sf-proxy-ok", { status: 200 });
     }
 
     if (request.method === "OPTIONS") {
@@ -60,20 +71,20 @@ export default {
       return json({
         ok: true,
         app: "sf-panel-cf",
-        version: env.APP_VERSION || "2.1.0",
+        version: env.APP_VERSION || "2.1.1",
         proxy_path: env.PROXY_PATH || "/sf-vpn",
       });
     }
 
     if (env.ASSETS) {
-      if (path === "/" || path === "") path = "/index.html";
-      let res = await env.ASSETS.fetch(new URL(path, url.origin));
-      if (res.status === 404 && !path.includes(".")) {
+      let assetPath = path === "/" || path === "" ? "/index.html" : path;
+      let res = await env.ASSETS.fetch(new URL(assetPath, url.origin));
+      if (res.status === 404 && !assetPath.includes(".")) {
         res = await env.ASSETS.fetch(new URL("/index.html", url.origin));
       }
       return securityHeaders(res);
     }
 
-    return new Response("SF-Panel CF v2.1 + VLESS proxy", { status: 200 });
+    return new Response("SF-Panel CF", { status: 200 });
   },
 };
