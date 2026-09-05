@@ -1,5 +1,6 @@
 /**
- * VLESS over WebSocket on Cloudflare Workers (BPB-style)
+ * VLESS over WebSocket on Cloudflare Workers
+ * Supports sec-websocket-protocol early data (common with v2rayNG etc.)
  */
 import { connect } from "cloudflare:sockets";
 
@@ -20,8 +21,22 @@ function uuidBytesToString(bytes) {
   ).toLowerCase();
 }
 
+function base64ToArrayBuffer(base64Str) {
+  if (!base64Str) return null;
+  try {
+    const s = base64Str.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = s + "===".slice((s.length + 3) % 4);
+    const binary = atob(pad);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  } catch {
+    return null;
+  }
+}
+
 function parseVlessHeader(buf) {
-  if (buf.byteLength < 24) return null;
+  if (!buf || buf.byteLength < 24) return null;
   const view = new DataView(buf);
   const version = view.getUint8(0);
   if (version !== 0 && version !== 1) return null;
@@ -62,22 +77,28 @@ function parseVlessHeader(buf) {
 }
 
 async function isAuthorized(env, uuid) {
+  // Open mode for testing
+  if (String(env.PROXY_OPEN || "") === "1") return true;
+
   const u = String(uuid || "").toLowerCase();
   const master = String(env.PROXY_MASTER_UUID || "").toLowerCase();
   if (master && u === master) return true;
   if (!env.DB) return false;
   try {
+    // avoid lower() for wider D1 compatibility
     const row = await env.DB.prepare(
-      "SELECT expiry, enable FROM accounts WHERE lower(uuid)=? AND enable=1 LIMIT 1"
+      "SELECT uuid, expiry, enable FROM accounts WHERE enable=1"
     )
-      .bind(u)
-      .first();
-    if (!row) return false;
-    if (row.expiry && Number(row.expiry) > 0 && Number(row.expiry) < Date.now()) {
+      .all();
+    const results = row?.results || [];
+    const found = results.find((r) => String(r.uuid || "").toLowerCase() === u);
+    if (!found) return false;
+    if (found.expiry && Number(found.expiry) > 0 && Number(found.expiry) < Date.now()) {
       return false;
     }
     return true;
   } catch {
+    // if DB fails, allow master only
     return false;
   }
 }
@@ -94,18 +115,31 @@ export async function handleVlessWebSocket(request, env) {
   if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
     return new Response("Expected WebSocket", { status: 426 });
   }
+
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair);
   server.accept();
-  handleSession(server, env).catch(() => {
+
+  // Early data from clients (v2ray etc.)
+  const earlyHeader = request.headers.get("sec-websocket-protocol") || "";
+  const earlyData = base64ToArrayBuffer(earlyHeader);
+
+  handleSession(server, env, earlyData).catch(() => {
     try {
       server.close();
     } catch {}
   });
-  return new Response(null, { status: 101, webSocket: client });
+
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+    headers: earlyHeader
+      ? { "Sec-WebSocket-Protocol": earlyHeader.split(",")[0].trim() }
+      : undefined,
+  });
 }
 
-async function handleSession(ws, env) {
+async function handleSession(ws, env, earlyData) {
   let remote = null;
   let writer = null;
   let headerDone = false;
@@ -128,10 +162,15 @@ async function handleSession(ws, env) {
   };
 
   const processMsg = async (data) => {
-    if (closed) return;
+    if (closed || !data) return;
     if (!headerDone) {
       const parsed = parseVlessHeader(data);
-      if (!parsed || parsed.cmd !== 1) {
+      if (!parsed) {
+        closeAll();
+        return;
+      }
+      // TCP only
+      if (parsed.cmd !== 1) {
         closeAll();
         return;
       }
@@ -141,14 +180,22 @@ async function handleSession(ws, env) {
         return;
       }
       headerDone = true;
-      remote = connect({
-        hostname: parsed.address,
-        port: parsed.port,
-      });
+
+      try {
+        remote = connect({
+          hostname: parsed.address,
+          port: parsed.port,
+        });
+      } catch {
+        closeAll();
+        return;
+      }
       writer = remote.writable.getWriter();
+
       if (ws.readyState === WS_OPEN) {
         ws.send(new Uint8Array([parsed.version, 0]));
       }
+
       const payload = data.slice(parsed.rawHeaderLen);
       if (payload.byteLength > 0) {
         await writer.write(new Uint8Array(payload));
@@ -156,7 +203,7 @@ async function handleSession(ws, env) {
       pumpRemoteToWs(remote, ws, closeAll);
       return;
     }
-    if (writer && data?.byteLength) {
+    if (writer && data.byteLength) {
       await writer.write(new Uint8Array(data));
     }
   };
@@ -166,8 +213,7 @@ async function handleSession(ws, env) {
     busy = true;
     try {
       while (queue.length && !closed) {
-        const item = queue.shift();
-        await processMsg(item);
+        await processMsg(queue.shift());
       }
     } catch {
       closeAll();
@@ -191,6 +237,11 @@ async function handleSession(ws, env) {
 
   ws.addEventListener("close", closeAll);
   ws.addEventListener("error", closeAll);
+
+  if (earlyData && earlyData.byteLength) {
+    queue.push(earlyData);
+    drain();
+  }
 }
 
 async function pumpRemoteToWs(remote, ws, closeAll) {
