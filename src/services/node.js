@@ -1,19 +1,31 @@
 /**
- * Link builder + optional remote node API.
- * Default: links point to THIS Cloudflare Worker (PUBLIC_DOMAIN) for VLESS WS proxy.
+ * VLESS link builder + optional remote node API.
+ * Links target PUBLIC_DOMAIN (this Cloudflare Worker) by default.
  */
 import { uuid, randomHex, nowMs } from "../utils/helpers.js";
 
-export function buildVlessLink(node, clientUuid, email) {
-  const host = (node?.public_host || "example.com")
+/**
+ * Build a client-compatible VLESS+WS+TLS link (v2rayNG / Hiddify / Streisand)
+ */
+export function buildVlessLink(node, clientUuid, email, env = null) {
+  const host = (
+    (env && env.PUBLIC_DOMAIN) ||
+    node?.public_host ||
+    "example.com"
+  )
     .replace(/^https?:\/\//, "")
-    .split("/")[0];
+    .split("/")[0]
+    .trim();
+
   const port = node?.port || 443;
-  let path = node?.path_prefix || "/sf-vpn";
-  // BPB/Zeus-style: WS early data greatly improves handshake success on CF
-  if (path && !path.includes("ed=")) {
-    path += (path.includes("?") ? "&" : "?") + "ed=2560";
-  }
+  let proxyPath = (env && env.PROXY_PATH) || node?.path_prefix || "/sf-vpn";
+  if (!proxyPath.startsWith("/")) proxyPath = "/" + proxyPath;
+  proxyPath = proxyPath.replace(/\/$/, "") || "/sf-vpn";
+
+  // path with early-data param — required for many CF clients
+  // Result encoded: %2Fsf-vpn%3Fed%3D2560
+  const pathWithEd = proxyPath + "?ed=2560";
+
   const sni = node?.sni || host;
   const hh = node?.host_header || host;
   const security = node?.security || "tls";
@@ -25,16 +37,12 @@ export function buildVlessLink(node, clientUuid, email) {
   params.set("encryption", "none");
   params.set("security", security);
   params.set("type", transport);
-  if (transport === "ws" || transport === "httpupgrade") {
-    params.set("path", path);
-    params.set("host", hh);
-  }
+  params.set("path", pathWithEd);
+  params.set("host", hh);
   if (security === "tls" || security === "reality") {
     params.set("sni", sni);
     params.set("fp", fp);
-    // do NOT force alpn=http/1.1 — many CF setups work better without it
   }
-  if (node?.allow_insecure) params.set("allowInsecure", "1");
 
   return `vless://${clientUuid}@${host}:${port}?${params.toString()}#${name}`;
 }
@@ -48,9 +56,11 @@ export function buildSubBody(links, title) {
   }
 }
 
-/** Auto node = this Worker domain */
+/** Default node = this Worker */
 export function workerAsNode(env) {
-  const host = (env.PUBLIC_DOMAIN || "").replace(/^https?:\/\//, "").split("/")[0];
+  const host = (env.PUBLIC_DOMAIN || "")
+    .replace(/^https?:\/\//, "")
+    .split("/")[0];
   const path = env.PROXY_PATH || "/sf-vpn";
   return {
     id: 0,
@@ -63,18 +73,17 @@ export function workerAsNode(env) {
     host_header: host || "example.com",
     security: "tls",
     fingerprint: "chrome",
-    alpn: "http/1.1",
     allow_insecure: 0,
     api_url: "",
   };
 }
 
-export async function createRemoteAccount(node, { email, days, limitGb, tgId }) {
+export async function createRemoteAccount(node, { email, days, limitGb, tgId }, env = null) {
   const clientUuid = uuid();
   const sub = randomHex(8);
   const limit = (Number(limitGb) || 0) * 1073741824;
   const expiry = days ? nowMs() + Number(days) * 86400000 : 0;
-  const links = [buildVlessLink(node, clientUuid, email)];
+  const links = [buildVlessLink(node, clientUuid, email, env)];
 
   if (!node?.api_url) {
     return {
@@ -124,7 +133,7 @@ export async function createRemoteAccount(node, { email, days, limitGb, tgId }) 
       links:
         Array.isArray(data.links) && data.links.length
           ? data.links
-          : [buildVlessLink(node, data.uuid || clientUuid, email)],
+          : [buildVlessLink(node, data.uuid || clientUuid, email, env)],
     };
   } catch (e) {
     return {

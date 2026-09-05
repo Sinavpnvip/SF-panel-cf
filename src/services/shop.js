@@ -133,7 +133,7 @@ export async function purchasePlan(db, env, tgId, planId, couponCode) {
       days: plan.days,
       limitGb: plan.limit_gb,
       tgId,
-    });
+    }, env);
   } catch (e) {
     await balanceAdd(db, tgId, final, "refund", "خطا ساخت اکانت");
     return { ok: false, error: "خطا در ساخت اکانت: " + e.message };
@@ -220,7 +220,7 @@ export async function giveTrial(db, env, tgId) {
     days,
     limitGb: gb,
     tgId,
-  });
+  }, env);
   await ex(db, "UPDATE users SET trial_last=? WHERE tg_id=?", [nowMs(), tgId]);
   await ex(
     db,
