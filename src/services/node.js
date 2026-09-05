@@ -1,11 +1,13 @@
 /**
- * Node / inbound link builder — SNI, host, path, security, fingerprint
- * Actual proxy traffic runs on external Xray node, not on Worker.
+ * Link builder + optional remote node API.
+ * Default: links point to THIS Cloudflare Worker (PUBLIC_DOMAIN) for VLESS WS proxy.
  */
 import { uuid, randomHex, nowMs } from "../utils/helpers.js";
 
 export function buildVlessLink(node, clientUuid, email) {
-  const host = (node?.public_host || "example.com").replace(/^https?:\/\//, "").split("/")[0];
+  const host = (node?.public_host || "example.com")
+    .replace(/^https?:\/\//, "")
+    .split("/")[0];
   const port = node?.port || 443;
   const path = node?.path_prefix || "/sf-vpn";
   const sni = node?.sni || host;
@@ -41,6 +43,27 @@ export function buildSubBody(links, title) {
   } catch {
     return raw;
   }
+}
+
+/** Auto node = this Worker domain */
+export function workerAsNode(env) {
+  const host = (env.PUBLIC_DOMAIN || "").replace(/^https?:\/\//, "").split("/")[0];
+  const path = env.PROXY_PATH || "/sf-vpn";
+  return {
+    id: 0,
+    name: "cloudflare-worker",
+    public_host: host || "example.com",
+    port: 443,
+    transport: "ws",
+    path_prefix: path,
+    sni: host || "example.com",
+    host_header: host || "example.com",
+    security: "tls",
+    fingerprint: "chrome",
+    alpn: "http/1.1",
+    allow_insecure: 0,
+    api_url: "",
+  };
 }
 
 export async function createRemoteAccount(node, { email, days, limitGb, tgId }) {
@@ -80,9 +103,6 @@ export async function createRemoteAccount(node, { email, days, limitGb, tgId }) 
         tg_id: String(tgId || ""),
         uuid: clientUuid,
         sub_id: sub,
-        sni: node.sni || "",
-        path: node.path_prefix || "",
-        host: node.public_host || "",
       }),
     });
     clearTimeout(t);
@@ -98,9 +118,10 @@ export async function createRemoteAccount(node, { email, days, limitGb, tgId }) 
       remote_id: String(data.id || data.remote_id || ""),
       limit_bytes: data.limit_bytes ?? limit,
       expiry: data.expiry ?? expiry,
-      links: Array.isArray(data.links) && data.links.length
-        ? data.links
-        : [buildVlessLink(node, data.uuid || clientUuid, email)],
+      links:
+        Array.isArray(data.links) && data.links.length
+          ? data.links
+          : [buildVlessLink(node, data.uuid || clientUuid, email)],
     };
   } catch (e) {
     return {

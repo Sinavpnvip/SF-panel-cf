@@ -7,7 +7,7 @@ import {
   logEvent,
 } from "../utils/db.js";
 import { nowMs, safeInt } from "../utils/helpers.js";
-import { createRemoteAccount } from "./node.js";
+import { createRemoteAccount, workerAsNode } from "./node.js";
 
 export async function listPlans(db) {
   return q(
@@ -65,7 +65,7 @@ export async function commitCoupon(db, couponId, userId) {
   } catch {}
 }
 
-async function pickNode(db, plan) {
+async function pickNode(db, plan, env) {
   if (plan?.node_id) {
     const n = await q(
       db,
@@ -75,12 +75,16 @@ async function pickNode(db, plan) {
     );
     if (n) return n;
   }
-  return q(
+  const n = await q(
     db,
     "SELECT * FROM nodes WHERE enable=1 ORDER BY sort, id LIMIT 1",
     [],
     true
   );
+  if (n) return n;
+  // Default: this Cloudflare Worker as proxy (BPB-style)
+  if (env && env.PUBLIC_DOMAIN) return workerAsNode(env);
+  return null;
 }
 
 export async function purchasePlan(db, env, tgId, planId, couponCode) {
@@ -115,10 +119,10 @@ export async function purchasePlan(db, env, tgId, planId, couponCode) {
       need: final - (u.balance || 0),
     };
 
-  const node = await pickNode(db, plan);
+  const node = await pickNode(db, plan, env);
   if (!node || !node.public_host) {
     await balanceAdd(db, tgId, final, "refund", "نود فعال نیست");
-    return { ok: false, error: "هیچ نود فعالی تنظیم نشده. از پنل ادمین نود اضافه کنید." };
+    return { ok: false, error: "PUBLIC_DOMAIN تنظیم نشده یا نود فعال ندارید." };
   }
 
   const email = `shop${tgId}-${Date.now().toString(36)}`;
@@ -206,7 +210,7 @@ export async function giveTrial(db, env, tgId) {
   }
   const days = safeInt(env.TRIAL_DAYS, 1);
   const gb = safeInt(env.TRIAL_GB, 1);
-  const node = await pickNode(db, null);
+  const node = await pickNode(db, null, env);
   if (!node || !node.public_host) {
     return { ok: false, error: "نود فعال نیست" };
   }
