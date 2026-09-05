@@ -9,12 +9,15 @@ export function buildVlessLink(node, clientUuid, email) {
     .replace(/^https?:\/\//, "")
     .split("/")[0];
   const port = node?.port || 443;
-  const path = node?.path_prefix || "/sf-vpn";
+  let path = node?.path_prefix || "/sf-vpn";
+  // BPB/Zeus-style: WS early data greatly improves handshake success on CF
+  if (path && !path.includes("ed=")) {
+    path += (path.includes("?") ? "&" : "?") + "ed=2560";
+  }
   const sni = node?.sni || host;
   const hh = node?.host_header || host;
   const security = node?.security || "tls";
   const fp = node?.fingerprint || "chrome";
-  const alpn = node?.alpn || "http/1.1";
   const transport = node?.transport || "ws";
   const name = encodeURIComponent(email || "sf");
 
@@ -29,7 +32,7 @@ export function buildVlessLink(node, clientUuid, email) {
   if (security === "tls" || security === "reality") {
     params.set("sni", sni);
     params.set("fp", fp);
-    if (alpn) params.set("alpn", alpn);
+    // do NOT force alpn=http/1.1 — many CF setups work better without it
   }
   if (node?.allow_insecure) params.set("allowInsecure", "1");
 
