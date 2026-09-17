@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: sf-panel
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: SF_DATA_DIR
+        value: /data
+      - key: ADMIN_USER
+        sync: false
+      - key: ADMIN_PASS
+        sync: false
+      - key: TG_BOT_TOKEN
+        sync: false
+      - key: TG_ADMIN_IDS
+        sync: false
+    disk:
+      name: sf-data
+      mountPath: /data
+      sizeGB: 1

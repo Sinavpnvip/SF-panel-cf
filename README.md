@@ -1,64 +1,56 @@
-# SF-Panel CF v2
+# SF-Panel v2.1.0
 
-پنل فروش + ربات تلگرام روی **Cloudflare Workers + D1 + KV**
+پنل مدیریت Xray + ربات فروش تلگرام (aiohttp / SQLite)
 
-## معماری
+## ویژگی‌ها
+- پنل وب فارسی RTL با داشبورد، کلاینت‌ها، اینباندها، تنظیمات، TOTP
+- ربات تلگرام خرید / تمدید / کیف‌پول
+- پشتیبانی Reality / VLESS / VMess و …
+- حالت VPS و PaaS (روتر L4 تک‌پورت)
+- مسیر هیبرید Cloudflare Workers + agent روی VPS (اسکلت)
 
-| لایه | کجا |
-|------|-----|
-| پنل وب، API، ربات، دیتابیس | Cloudflare Worker |
-| ترافیک VPN / Xray | نود خارجی (VPS یا SF-Panel اصلی) |
-
-نودها شامل **SNI، Host Header، Path، Port، Fingerprint، ALPN، Security** هستند.
-
-## امنیت v2
-
-- هش رمز با salt + چند هزار دور SHA-256
-- JWT با انقضا
-- Rate limit روی API و وبهوک
-- قفل ورود بعد از تلاش‌های ناموفق
-- Secret برای وبهوک تلگرام
-- هدرهای امنیتی (CSP، nosniff، DENY frame)
-- اعتبارسنجی ورودی‌ها
-
-## دیپلوی
+## نصب سریع (Docker)
 
 ```bash
-npm i
-wrangler login
-wrangler d1 create sf-panel-db
-wrangler kv namespace create SF_KV
-# IDها را در wrangler.toml بگذار
-npm run db:migrate
-wrangler secret put JWT_SECRET
-wrangler secret put TG_BOT_TOKEN
-wrangler secret put TG_ADMIN_IDS
-wrangler secret put TG_WEBHOOK_SECRET   # اختیاری
-npm run deploy
+cp .env.example .env
+# ADMIN_USER و ADMIN_PASS را تنظیم کنید (حداقل ۸ کاراکتر)
+docker compose up -d --build
 ```
 
-وبهوک:
-```
-https://api.telegram.org/botTOKEN/setWebhook?url=https://DOMAIN/tg/webhook
+مرورگر: `http://SERVER:2087`
+
+اگر متغیرهای مدیر ست نشده باشند، صفحه نصب اولیه (`/api/setup`) را تکمیل کنید.
+
+## نصب بدون Docker
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export ADMIN_USER=admin ADMIN_PASS='StrongPass123'
+python app.py
 ```
 
-## بعد از دیپلوی
+## امنیت
+- هیچ اعتبار پیش‌فرض سختی وجود ندارد.
+- پشتیبان پیش‌فرض اسرار حساس را حذف می‌کند.
+- پس از بازیابی یا تغییر رمز، ورود مجدد لازم است.
+- جزئیات: [SECURITY.md](SECURITY.md) و [AUDIT.md](AUDIT.md)
 
-1. باز کردن دامنه → نصب ادمین (رمز ≥ ۸ کاراکتر)
-2. **نودها / SNI** → host + path + sni
-3. **پلن‌ها** → افزودن
-4. ربات `/start`
+## مستندات
+| فایل | موضوع |
+|------|--------|
+| [docs/DEPLOY_VPS.md](docs/DEPLOY_VPS.md) | نصب VPS/Docker |
+| [docs/DEPLOY_CLOUDFLARE.md](docs/DEPLOY_CLOUDFLARE.md) | مسیر Workers هیبرید |
+| [docs/NODE_AGENT.md](docs/NODE_AGENT.md) | agent مدیریت Xray |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | مهاجرت و تعمیر seed |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | معماری |
+| [AUDIT.md](AUDIT.md) | یافته‌ها و رفع باگ‌ها |
+| [CHANGELOG.md](CHANGELOG.md) | تغییرات |
 
-## ساختار
-
+## تست
+```bash
+python -m pytest tests/ -q
 ```
-src/index.js
-src/routes/api.js
-src/services/node.js   # لینک VLESS + SNI
-src/services/shop.js
-src/telegram/bot.js
-src/middleware/security.js
-src/utils/*
-web/index.html + style.css + app.js
-migrations/0001_init.sql
-```
+
+## مجوز
+مخزن اصلی ادعای مجوز مشخصی در فایل LICENSE نداشت؛ قبل از استفاده تجاری وضعیت حقوقی را بررسی کنید.
